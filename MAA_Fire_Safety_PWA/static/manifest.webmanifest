@@ -1,0 +1,13 @@
+{
+  "name": "MAA Fire Safety Checks",
+  "short_name": "MAA Checks",
+  "description": "Museum of Archaeology and Anthropology fire safety inspection checks",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f5f7f8",
+  "theme_color": "#17324d",
+  "icons": [
+    {"src":"/icons/icon-192.png","sizes":"192x192","type":"image/png"},
+    {"src":"/icons/icon-512.png","sizes":"512x512","type":"image/png"}
+  ]
+}
