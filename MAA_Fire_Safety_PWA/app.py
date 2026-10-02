@@ -18,7 +18,7 @@ SUPABASE_SERVICE_KEY = os.environ.get('SUPABASE_SERVICE_ROLE_KEY', '')
 ADMIN_PIN = os.environ.get('APP_ADMIN_PIN', '')
 PHOTO_BUCKET = os.environ.get('SUPABASE_PHOTO_BUCKET', 'inspection-photos')
 REMOTE = bool(SUPABASE_URL and SUPABASE_SERVICE_KEY)
-APP_VERSION = '7.2-refined'
+APP_VERSION = '8.0-final'
 
 TESTS = {
     'extinguishers': {'name':'Fire Extinguishers','frequency':'Monthly','months':1,'template':'fire_extinguisher.docx','kind':'extinguisher','description':'Monthly extinguisher inspection','sort_order':1},
@@ -264,6 +264,17 @@ class Handler(SimpleHTTPRequestHandler):
                     rr=sb('inspection_results',params={'select':'result','inspection_id':f"eq.{h['id']}"}) or []
                     h['counts']={k:sum(1 for x in rr if x.get('result')==k) for k in ('PASS','FAIL','ISSUE')}
                 return self.send_json({'history':hist,'mode':'supabase'})
+            m=re.fullmatch(r'/api/history/([^/]+)/pdf',p)
+            if m:
+                if not REMOTE: return self.send_json({'error':'Historical PDF requires Supabase'},409)
+                iid=m.group(1)
+                ins=sb('inspections',params={'select':'id,test_id,inspection_date,status','id':f'eq.{iid}','limit':'1'}) or []
+                if not ins: return self.send_json({'error':'Inspection not found'},404)
+                if ins[0].get('status')!='completed': return self.send_json({'error':'Only completed inspections can be exported'},409)
+                data=make_pdf_remote(iid)
+                friendly=TESTS.get(ins[0]['test_id'],{}).get('name',ins[0]['test_id']).replace(' ','_')
+                name=f"MAA_{friendly}_{ins[0]['inspection_date']}.pdf"
+                self.send_response(200); self.send_header('Content-Type','application/pdf'); self.send_header('Content-Disposition',f'attachment; filename="{name}"'); self.send_header('Content-Length',len(data)); self.send_header('Cache-Control','no-store'); self.end_headers(); self.wfile.write(data); return
             m=re.fullmatch(r'/api/history/([^/]+)',p)
             if m:
                 if not REMOTE: return self.send_json({'error':'History details require Supabase'},409)
