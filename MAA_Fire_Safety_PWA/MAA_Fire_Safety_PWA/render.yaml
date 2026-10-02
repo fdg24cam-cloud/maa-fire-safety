@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: maa-fire-safety-checks
+    runtime: docker
+    plan: free
+    autoDeploy: true
+    healthCheckPath: /health
