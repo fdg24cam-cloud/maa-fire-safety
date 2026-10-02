@@ -1,42 +1,59 @@
-# MAA Fire Safety Checks – Synced / Editable version
+# MAA Fire Safety Checks – Refined synced version 7.2
 
-This version adds:
+This version keeps the existing Supabase database and Render deployment and adds the requested refinements.
 
-- Supabase-backed shared progress between iPhone and desktop
-- Shared completed inspection history
-- Shared reference photos for every inspection item
-- Add new extinguishers, lights, locks, fire doors and final exits
-- Correct item names, IDs, type and order
-- Deactivate old items without losing history
-- Delete newly-added items only when they have never been used
-- Original MAA Word forms retained for original items
-- New items are appended to the generated PDF on an **Additional inspection items** page
-- Existing extinguisher reference photos remain built into the app
+## New in 7.2
 
-## One-time Supabase setup
+- Shared Supabase progress between iPhone and desktop
+- Editable inspection items for extinguishers, emergency lighting, fire doors, electronic locks and final exits
+- Reference-photo thumbnails in **Manage items**
+- Replace/take a reference photo directly from **Manage items**
+- Reorder inspection items with **↑ / ↓** controls
+- Automatic floor grouping in the management screen
+- **Jump to location** while carrying out an inspection
+- Progress percentage and current check number
+- Separate **evidence photos** for FAIL / ISSUE results; evidence belongs only to that inspection
+- Completed history with PASS / FAIL / ISSUE counts and item-level details
+- Evidence photos can be viewed from completed history
+- Dashboard shows last completed date and next due date
+- Admin-protected **Export backup** downloads all database records as JSON
+- Added items continue to appear on an **Additional inspection items** page in the official PDF
+- Fixed editing an official item so it remains marked as an official form item
+- New service-worker cache version so the updated PWA replaces the previous cached interface
 
-1. Create a free Supabase project.
-2. Open **SQL Editor** in Supabase.
-3. Open `supabase_schema.sql` from this package, paste the complete contents into a new query and click **Run**.
-4. In Supabase go to **Project Settings → API** and copy:
-   - Project URL
-   - `service_role` key (keep this secret; never put it in browser code or GitHub)
-5. In Render open the existing `maa-fire-safety` service → **Environment** and add:
-   - `SUPABASE_URL` = your Project URL
-   - `SUPABASE_SERVICE_ROLE_KEY` = your service_role key
-   - `APP_ADMIN_PIN` = a PIN of your choice for the **Manage items** screen
-   - optional: `SUPABASE_PHOTO_BUCKET` = `inspection-photos`
-6. Save the environment variables and redeploy.
-7. Open `/health` on your Render URL. It should report `"mode":"supabase"`.
+## Render environment variables
 
-The first app request after Supabase is configured automatically imports the five official inspection lists from the Word templates into the new database.
+Required:
 
-## Important security note
+- `SUPABASE_URL` = Supabase project URL
+- `SUPABASE_SERVICE_ROLE_KEY` = Supabase secret/server key
 
-`SUPABASE_SERVICE_ROLE_KEY` belongs only in Render Environment Variables. Do not commit it to GitHub and do not paste it into `index.html`, `app.py`, or any public file.
+Recommended:
 
-The `APP_ADMIN_PIN` protects adding/editing/deactivating inspection items. Inspection use itself remains deliberately simple for on-site use. If the app will be used by a wider group, add full user authentication before sharing the URL broadly.
+- `APP_ADMIN_PIN` = a private 4–6 digit PIN used for Manage Items and Export Backup
+
+Optional:
+
+- `SUPABASE_PHOTO_BUCKET` = `inspection-photos`
+
+The existing `SUPABASE_SECRET_KEY` variable may remain in Render, but version 7.2 reads `SUPABASE_SERVICE_ROLE_KEY`.
+
+## Supabase database
+
+No new SQL migration is required for the 7.2 refinements. Evidence photos are stored in the existing private `inspection-photos` Storage bucket using the inspection ID and item ID.
+
+If setting the project up from scratch, run `supabase_schema.sql` once in Supabase SQL Editor.
 
 ## Updating the existing GitHub / Render deployment
 
-Replace the contents of the existing `MAA_Fire_Safety_PWA` folder in GitHub with this package, commit the changes, then let Render auto-deploy. Keep the Render **Root Directory** as `MAA_Fire_Safety_PWA`.
+1. Open the repository `maa-fire-safety`.
+2. Open the existing `MAA_Fire_Safety_PWA` folder.
+3. Upload the **contents** of this package into that folder. Do not create another nested `MAA_Fire_Safety_PWA` folder.
+4. Commit directly to `main` with a message such as `Refine inspection workflow and evidence photos`.
+5. Render should auto-deploy. If not, use **Manual Deploy → Deploy latest commit**.
+6. Keep Render **Root Directory** as `MAA_Fire_Safety_PWA`.
+7. When Render shows **Live**, open the web app and press Refresh. The service worker cache has been bumped, so the new interface should take over automatically.
+
+## Security note
+
+Keep the Supabase server/secret key only in Render Environment Variables. Never paste it into GitHub or browser code.

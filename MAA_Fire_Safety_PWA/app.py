@@ -18,6 +18,7 @@ SUPABASE_SERVICE_KEY = os.environ.get('SUPABASE_SERVICE_ROLE_KEY', '')
 ADMIN_PIN = os.environ.get('APP_ADMIN_PIN', '')
 PHOTO_BUCKET = os.environ.get('SUPABASE_PHOTO_BUCKET', 'inspection-photos')
 REMOTE = bool(SUPABASE_URL and SUPABASE_SERVICE_KEY)
+APP_VERSION = '7.2-refined'
 
 TESTS = {
     'extinguishers': {'name':'Fire Extinguishers','frequency':'Monthly','months':1,'template':'fire_extinguisher.docx','kind':'extinguisher','description':'Monthly extinguisher inspection','sort_order':1},
@@ -252,13 +253,49 @@ class Handler(SimpleHTTPRequestHandler):
     def do_GET(self):
         try:
             p=urlparse(self.path).path
-            if p=='/health': return self.send_json({'ok':True,'mode':'supabase' if REMOTE else 'local','admin_pin':bool(ADMIN_PIN)})
+            if p=='/health': return self.send_json({'ok':True,'mode':'supabase' if REMOTE else 'local','admin_pin':bool(ADMIN_PIN),'version':APP_VERSION})
             if p=='/api/tests': return self.send_json({'today':date.today().isoformat(),'mode':'supabase' if REMOTE else 'local','tests':test_summaries()})
             if p=='/api/history':
                 if not REMOTE: return self.send_json({'history':[],'mode':'local'})
                 ensure_seeded(); hist=sb('inspections',params={'select':'id,test_id,inspection_date,initials,status,completed_at','status':'eq.completed','order':'inspection_date.desc,completed_at.desc','limit':'50'}) or []
                 for h in hist: h['test_name']=TESTS.get(h['test_id'],{}).get('name',h['test_id'])
+                # add outcome counts for the dashboard history
+                for h in hist:
+                    rr=sb('inspection_results',params={'select':'result','inspection_id':f"eq.{h['id']}"}) or []
+                    h['counts']={k:sum(1 for x in rr if x.get('result')==k) for k in ('PASS','FAIL','ISSUE')}
                 return self.send_json({'history':hist,'mode':'supabase'})
+            m=re.fullmatch(r'/api/history/([^/]+)',p)
+            if m:
+                if not REMOTE: return self.send_json({'error':'History details require Supabase'},409)
+                iid=m.group(1)
+                ins=sb('inspections',params={'select':'id,test_id,inspection_date,initials,status,completed_at','id':f'eq.{iid}','limit':'1'}) or []
+                if not ins: return self.send_json({'error':'Inspection not found'},404)
+                rows=sb('inspection_results',params={'select':'item_id,result,notes,updated_at','inspection_id':f'eq.{iid}'}) or []
+                items=sb('inspection_items',params={'select':'id,item_code,location,extinguisher_type,sort_order','test_id':f"eq.{ins[0]['test_id']}"}) or []
+                by={x['id']:x for x in items}
+                out=[]
+                for r in rows:
+                    it=by.get(r['item_id'],{})
+                    out.append({**r,'item_code':it.get('item_code',''),'location':it.get('location','Unknown item'),'extinguisher_type':it.get('extinguisher_type'),'sort_order':it.get('sort_order',999)})
+                out.sort(key=lambda x:(x.get('sort_order',999),x.get('location','')))
+                z=ins[0]; z['test_name']=TESTS.get(z['test_id'],{}).get('name',z['test_id'])
+                return self.send_json({'inspection':z,'results':out})
+            m=re.fullmatch(r'/api/evidence/([^/]+)/([^/]+)/photo',p)
+            if m:
+                if not REMOTE: return self.send_error(404)
+                inspection_id,item_id=m.group(1),m.group(2)
+                path=f'evidence/{inspection_id}/{item_id}.jpg'
+                r=requests.get(f'{SUPABASE_URL}/storage/v1/object/{PHOTO_BUCKET}/{path}',headers={'apikey':SUPABASE_SERVICE_KEY,'Authorization':f'Bearer {SUPABASE_SERVICE_KEY}'},timeout=30)
+                if r.status_code>=300: return self.send_error(404)
+                self.send_response(200); self.send_header('Content-Type',r.headers.get('Content-Type','image/jpeg')); self.send_header('Content-Length',len(r.content)); self.send_header('Cache-Control','no-store'); self.end_headers(); self.wfile.write(r.content); return
+            if p=='/api/backup':
+                if not self.require_admin(): return
+                if not REMOTE: return self.send_json({'error':'Backup requires Supabase'},409)
+                payload={'version':APP_VERSION,'exported_at':datetime.utcnow().isoformat()+'Z'}
+                for table in ('inspection_types','inspection_items','inspections','inspection_results'):
+                    payload[table]=sb(table,params={'select':'*'}) or []
+                data=json.dumps(payload,ensure_ascii=False,indent=2,default=str).encode()
+                self.send_response(200); self.send_header('Content-Type','application/json; charset=utf-8'); self.send_header('Content-Disposition','attachment; filename=MAA_Fire_Safety_Backup.json'); self.send_header('Content-Length',len(data)); self.send_header('Cache-Control','no-store'); self.end_headers(); self.wfile.write(data); return
             if p.startswith('/api/test/'):
                 tid=p.split('/')[-1]
                 if tid not in TESTS: return self.send_json({'error':'Unknown test'},404)
@@ -309,6 +346,22 @@ class Handler(SimpleHTTPRequestHandler):
                 # local-mode legacy endpoint
                 b=self.json_body(); tid=b['test_id']; data=make_pdf_local(tid,b.get('inspection_date') or date.today().isoformat(),(b.get('initials') or 'F.G.').strip(),b['results'])
                 friendly=TESTS[tid]['name'].replace(' ','_'); name=f"MAA_{friendly}_{b.get('inspection_date')}.pdf"; self.send_response(200); self.send_header('Content-Type','application/pdf'); self.send_header('Content-Disposition',f'attachment; filename="{name}"'); self.send_header('Content-Length',len(data)); self.end_headers(); self.wfile.write(data); return
+            m=re.fullmatch(r'/api/evidence/([^/]+)/([^/]+)/photo',p)
+            if m:
+                if not REMOTE: return self.send_json({'error':'Evidence photo storage requires Supabase configuration'},409)
+                inspection_id,item_id=m.group(1),m.group(2)
+                # Verify this item belongs to this inspection before accepting evidence.
+                ins=sb('inspections',params={'select':'test_id','id':f'eq.{inspection_id}','limit':'1'}) or []
+                item=sb('inspection_items',params={'select':'test_id','id':f'eq.{item_id}','limit':'1'}) or []
+                if not ins or not item or ins[0]['test_id']!=item[0]['test_id']: return self.send_json({'error':'Inspection item mismatch'},409)
+                b=self.json_body(); data=b.get('data_url',''); mm=re.match(r'data:(image/[^;]+);base64,(.+)',data)
+                if not mm: raise ValueError('Invalid image')
+                raw=base64.b64decode(mm.group(2))
+                if len(raw)>3_000_000: raise ValueError('Photo is too large after compression')
+                path=f'evidence/{inspection_id}/{item_id}.jpg'
+                r=requests.post(f'{SUPABASE_URL}/storage/v1/object/{PHOTO_BUCKET}/{path}',headers={'apikey':SUPABASE_SERVICE_KEY,'Authorization':f'Bearer {SUPABASE_SERVICE_KEY}','Content-Type':'image/jpeg','x-upsert':'true'},data=raw,timeout=30)
+                if r.status_code>=300: raise RuntimeError('Evidence photo upload failed: '+r.text[:300])
+                return self.send_json({'ok':True,'url':f'/api/evidence/{inspection_id}/{item_id}/photo?t={int(datetime.utcnow().timestamp())}'})
             if p=='/api/manage/item':
                 if not self.require_admin(): return
                 if not REMOTE: return self.send_json({'error':'Item editing requires Supabase configuration'},409)
@@ -316,11 +369,12 @@ class Handler(SimpleHTTPRequestHandler):
                 if tid not in TESTS: raise ValueError('Unknown test')
                 loc=(b.get('location') or '').strip()
                 if not loc: raise ValueError('Location is required')
-                payload={'test_id':tid,'item_code':(b.get('item_code') or '').strip(),'location':loc,'extinguisher_type':(b.get('extinguisher_type') or '').strip() or None,'sort_order':int(b.get('sort_order') or 999),'active':bool(b.get('active',True)),'source_kind':'added'}
+                payload={'test_id':tid,'item_code':(b.get('item_code') or '').strip(),'location':loc,'extinguisher_type':(b.get('extinguisher_type') or '').strip() or None,'sort_order':int(b.get('sort_order') or 999),'active':bool(b.get('active',True))}
                 if b.get('id'):
-                    # Never alter source mapping when editing an official item
+                    # Preserve official/source metadata when editing an existing item.
                     out=sb('inspection_items','PATCH',params={'id':f"eq.{b['id']}"},payload=payload,prefer='return=representation')
                 else:
+                    payload['source_kind']='added'
                     out=sb('inspection_items','POST',payload=payload,prefer='return=representation')
                 return self.send_json(out[0])
             m=re.fullmatch(r'/api/manage/item/([^/]+)/deactivate',p)
@@ -357,6 +411,12 @@ class Handler(SimpleHTTPRequestHandler):
     def do_DELETE(self):
         try:
             p=urlparse(self.path).path
+            m=re.fullmatch(r'/api/evidence/([^/]+)/([^/]+)/photo',p)
+            if m:
+                if not REMOTE: return self.send_json({'error':'Evidence photo storage requires Supabase configuration'},409)
+                path=f'evidence/{m.group(1)}/{m.group(2)}.jpg'
+                requests.delete(f'{SUPABASE_URL}/storage/v1/object/{PHOTO_BUCKET}/{path}',headers={'apikey':SUPABASE_SERVICE_KEY,'Authorization':f'Bearer {SUPABASE_SERVICE_KEY}'},timeout=30)
+                return self.send_json({'ok':True})
             m=re.fullmatch(r'/api/item/([^/]+)/photo',p)
             if m:
                 if not REMOTE: return self.send_json({'error':'Shared photo storage requires Supabase configuration'},409)
